@@ -1,0 +1,19 @@
+{
+  "name": "orca-plugin",
+  "owner": {
+    "name": "gilbert lim"
+  },
+  "metadata": {
+    "description": "Orca 워크트리로 갈라 병렬로 돌리는 절차. Claude Code 플러그인과 Orca 앱 플러그인이 한 레포에 있다.",
+    "version": "0.1.0"
+  },
+  "plugins": [
+    {
+      "name": "orca",
+      "source": "./",
+      "description": "레포마다 Orca 워크트리를 따고 에이전트를 붙여 리뷰와 머지까지 그 안에서 끝내는 절차. dispatch, status, review, handback, land 다섯 마디를 슬래시 커맨드로 낸다.",
+      "category": "workflow",
+      "tags": ["orca", "worktree", "parallel", "review", "orchestration"]
+    }
+  ]
+}

@@ -1,0 +1,108 @@
+---
+name: orca-flow
+description: Use when work spans several repos (or several people touching one repo) and you want each slice run by its own agent in its own Orca worktree, with review and merge happening inside that worktree. Covers dispatch, status, review, handback, and land — and what a dispatch prompt must carry.
+---
+
+# Orca 워크트리로 갈라 병렬로 돌린다
+
+한 작업이 레포 여럿에 걸릴 때, 각 레포의 몫을 Orca 워크트리에 하나씩 떼어 에이전트를 붙이고 리뷰까지 그 안에서 끝내는 절차다. <br>
+오케스트레이터 세션은 무엇을 어디로 나눌지와 언제 머지할지만 들고, 코드와 diff는 워크트리 밖으로 안 나온다.
+
+스크립트는 `${CLAUDE_PLUGIN_ROOT}/bin/` 아래에 있고 슬래시 커맨드 다섯(`/orca:dispatch`, `/orca:status`, `/orca:review`, `/orca:handback`, `/orca:land`)이 그것을 부른다.
+
+## 전제
+
+- **Orca 앱과 `orca` CLI가 있어야 한다.** 스크립트가 그것 없이는 한 줄도 안 돈다.
+- **레포가 Orca에 등록돼 있어야 한다.** 스크립트는 레포를 경로가 아니라 등록된 displayName으로 받는다. `orca repo list --json`으로 확인한다.
+- 프로젝트 루트의 `.orca-flow.json`이 기준 브랜치, 에이전트 명령, 셋업 대상을 정한다. 없으면 기본값으로 돈다.
+
+## 한 사이클
+
+```bash
+# 1. 프롬프트를 파일로 쓴다
+$EDITOR /tmp/shared-trade.md
+
+# 2. 워크트리를 따고 에이전트를 붙인다
+${CLAUDE_PLUGIN_ROOT}/bin/dispatch.sh shared migration-platform-trade /tmp/shared-trade.md
+
+# 3. 진행을 본다
+${CLAUDE_PLUGIN_ROOT}/bin/status.sh
+
+# 4. 커밋이 서면 같은 워크트리에서 리뷰어를 띄운다. 결과는 파일로 떨어진다
+${CLAUDE_PLUGIN_ROOT}/bin/review.sh shared migration-platform-trade
+
+# 5. blocking이 있으면 그 워크트리의 작업 에이전트에게 되돌린다
+${CLAUDE_PLUGIN_ROOT}/bin/handback.sh shared migration-platform-trade
+
+# 6. 고쳐서 커밋되면 같은 리뷰어에게 재리뷰를 시킨다. 4번을 다시 부르면 된다
+
+# 7. 판정이 닫히면 기준 브랜치에 머지하고 push한 뒤 워크트리를 지운다
+${CLAUDE_PLUGIN_ROOT}/bin/land.sh shared migration-platform-trade
+```
+
+레포가 넷이면 2번을 넷 나란히 부른다. 디렉터리가 겹치지 않아 서로를 안 건드린다. <br>
+5번과 6번은 blocking이 없어질 때까지 돈다. 도는 자리는 언제나 그 워크트리 안이고, 오케스트레이터는 판정 파일만 읽는다.
+
+## 무엇을 워크트리로 가르나
+
+워크트리는 **같은 레포를 둘 이상이 동시에 만질 때** 딴다. 레포가 갈리는 병렬 작업은 각 레포의 메인 체크아웃에서 그대로 하면 된다 — 형제 레포는 디렉터리가 겹치지 않는데 거기에 워크트리를 얹으면 브랜치와 머지, push 확인 프롬프트만 레포 수만큼 는다.
+
+**계약이 걸린 변경에는 쓰지 않는다.** 여러 레포가 함께 커밋돼야 하는데 브랜치가 갈리면, 계약이 깨진 중간 상태가 머지될 때까지 남는다.
+
+## 프롬프트에 반드시 드는 것
+
+워크트리의 에이전트는 오케스트레이터 세션의 서브에이전트 정의를 못 읽는다. 워크트리가 그 레포만의 체크아웃이라 거기 없기 때문이다. 여섯이 빠지면 왕복이 는다.
+
+| 넣을 것 | 왜 |
+|---------|-----|
+| 역할과 담당 경계 | "너는 X 담당이다. 이 worktree는 Y 레포이고 여기만 수정한다" |
+| 읽을 문서의 **절대 경로** | 계약 정본이 다른 레포에 있는데 워크트리에서는 상대 경로로 못 닿는다 |
+| 무엇을 판단해서 정할 것인지 | 계약이 구현자에게 남긴 자리를 짚어 준다. 안 짚으면 선택지만 나열한 결과가 온다 |
+| 범위 밖 | 다른 레포 금지, 이번 단계에 안 붙는 것 |
+| 검사 스크립트 | 그 작업에 걸리는 프로젝트 검사 |
+| 커밋하되 push 금지 | 워크트리 브랜치에 커밋까지 시키고 원격은 사람이 연다 |
+
+계약이 아직 머지 전 브랜치에 있으면 **그 브랜치의 워크트리 경로**를 읽으라고 적는다. 메인 체크아웃을 읽으면 낡은 이름으로 구현이 선다.
+
+뼈대는 `${CLAUDE_PLUGIN_ROOT}/templates/prompt-template.md`이고, 프로젝트가 `.orca-flow.json`의 `promptTemplate`에 제 것을 지정했으면 그쪽이 이긴다.
+
+## 진행은 Orca 카드에 앉는다
+
+Orca 워크스페이스 카드에 한 줄짜리 코멘트와 보드 상태(`todo`, `in-progress`, `in-review`, `completed`)가 붙는다. 스크립트가 자기 마디에서 그 둘을 갱신하고, 워크트리 안의 에이전트도 제 손으로 쓴다.
+
+| 언제 | 상태 | 카드에 앉는 줄 |
+|------|------|----------------|
+| dispatch가 에이전트를 붙일 때 | `in-progress` | 에이전트 투입 |
+| 작업 에이전트가 마디를 지날 때 | 그대로 | 그 에이전트가 직접 쓴 한 줄 |
+| review가 리뷰어를 띄울 때 | `in-review` | 리뷰 중 (커밋 N개) |
+| 리뷰어가 판정 파일을 다 썼을 때 | 그대로 | 리뷰: blocking N건, 또는 리뷰 통과 |
+| handback이 되돌릴 때 | `in-progress` | 재작업 -- 리뷰 blocking 반영 |
+| land가 push까지 끝냈을 때 | `completed` | 기준 브랜치에 머지, push 완료 |
+
+둘째 행이 나머지와 다르다. 스크립트가 아니라 에이전트가 쓰는 줄이고, 그래서 커밋 수가 못 담는 것("테스트 도는 중", "FK에 막힘")이 거기 올라온다. dispatch와 handback이 프롬프트 끝에 그 지시를 붙여 보내므로 오케스트레이터가 챙길 필요는 없다.
+
+카드는 조용히 바뀐다. Orca를 안 보고 있으면 바뀐 줄 모르고, CLI에는 알림을 쏘는 명령이 없다. 그 자리를 같은 레포의 Orca 앱 플러그인이 메운다 — 에이전트가 멈추면 데스크톱 알림이 뜨고 카드 줄이 본문 첫 줄로 실린다.
+
+## 리뷰가 워크트리 안에서 도는 이유
+
+리뷰어를 오케스트레이터 세션의 서브에이전트로 띄우면 레포 수만큼의 diff가 그 세션 컨텍스트로 올라온다. 레포 넷이면 그게 곧 한도다. `review.sh`는 작업이 있는 그 워크트리에 터미널을 하나 더 열고 거기서 돌린다.
+
+**판정은 반드시 파일로 받는다.** TUI에만 뱉으면 스피너 재도색이 스크롤백을 밀어내 판정이 통째로 사라진다.
+
+## 새 워크트리는 그대로 못 쓴다
+
+git worktree는 추적하는 파일만 가져오는데, 앱을 띄우고 테스트를 돌리는 데 필요한 것 상당수가 gitignore 대상이다. `.env` 계열, 개발자별 프로파일, 코드 생성 산출물, submodule이 빈 채로 남는다. 그 상태로 빌드하면 원인이 코드처럼 보이는 오류가 난다.
+
+`bin/worktree-setup.sh`가 그 빈자리를 같은 레포의 메인 체크아웃에서 채운다. **셋업이 끝나야 에이전트가 뜬다는 순서가 dispatch의 존재 이유다.** 무엇을 채울지는 `.orca-flow.json`의 `setup`이 정한다.
+
+## 세션을 갈아탈 때
+
+워크트리는 세션과 무관하게 살아 있고 그 안의 에이전트도 계속 돈다. 죽는 것은 오케스트레이터 대화뿐이다. 리뷰 판정도 워크스페이스 밖(`~/orca/reviews/`)이라 남는다.
+
+그래도 **어떤 판단을 왜 그렇게 내렸는지는 코드에도 커밋에도 안 남는다.** 클리어 전에 그것을 파일로 내려놓는다.
+
+1. `status.sh`로 커밋과 리뷰 라운드를 확인한다. 판정이 닫힌 것은 land하고 안 닫힌 것은 그대로 둔다.
+2. 진행 문서에 무엇을 왜 그렇게 했는지, 넘어간 숙제가 무엇인지 적는다.
+3. 아직 안 끝난 워크트리가 있으면 어느 것이 몇 라운드째이고 무엇을 기다리는지 한 줄 남긴다. `status.sh`가 처지는 보여 주지만 왜 그러고 있는지는 안 보여 준다.
+
+이어갈 때는 `status.sh`부터 본다. 그리고 **메인 체크아웃이 origin보다 낡을 수 있다** — 워크트리는 origin 기준으로 서는데 메인 체크아웃은 그렇지 않아서, 다른 세션이 land한 것이 안 보인다. `git -C <repo> pull --ff-only`를 먼저 돌린다.

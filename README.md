@@ -290,6 +290,19 @@ push가 실패하면 워크트리를 안 지운다. 지우면 되돌릴 자리�
 
 **긴 셋업은 알림을 놓칠 수 있다.** 이벤트 핸들러는 5분에 끊기고 워커는 유휴 5분에 수거된다. 자식은 detached로 띄우므로 `pnpm install`이 중간에 죽지는 않지만, 4분을 넘기면 "백그라운드로 계속 돈다"는 알림으로 바뀐다.
 
+**플러그인 `id`에 `orca`를 쓰면 설치가 거부된다.** 이 플러그인의 id가 `worktree-flow`인 이유다. 처음에 `orca-flow`로 뒀다가 설치가 계속 실패했고, 오류는 "플러그인 설치에 실패했습니다. 소스를 확인하고 다시 시도하세요" 한 줄뿐이었다. <br>
+로그에도 아무것도 안 남는다 — `main.trace.ndjson`에 설치 경로가 아예 추적되지 않고 `plugins-data/audit.log`는 이미 도는 플러그인의 호출만 적는다. 그래서 매니페스트 스키마, 디렉터리 배치, 부모 경로, `.git` 유무, 하위 디렉터리, 실행 비트를 차례로 의심하게 된다. 전부 무죄였다. <br>
+가른 방법은 **되는 것에서 한 번에 한 줄씩 바꾸는 것**이었다. 설치되는 매니페스트를 하나 확보하고 `id`, `publisher`, `name`, `description`을 각각 하나만 바꾼 디렉터리 넷을 만들어 보면 `id`에서 걸린다. `publisher`가 무엇이든 상관없다.
+
+**소스에 제어문자가 있으면 거부된다.** 같은 오류 문구로 나온다. ANSI 이스케이프를 다루는 코드에서 나기 쉽다 — 정규식에 `\u001b`를 이스케이프 표기로 적어야 하는데 실제 ESC 바이트가 파일에 박히면, JS로는 유효하고 `node --check`도 통과하며 `cat -A`로 봐도 정상처럼 보인다. <br>
+의심되면 바이트로 센다.
+
+```bash
+python3 -c "
+b=open('main.mjs','rb').read()
+print([hex(c) for c in sorted(set(c for c in b if c<9 or 13<c<32))] or '없음')"
+```
+
 **플러그인 API는 문서가 없다.** 근거는 [plugin-host-api.ts](https://github.com/stablyai/orca/blob/main/src/shared/plugins/plugin-host-api.ts)와 [plugin-manifest.ts](https://github.com/stablyai/orca/blob/main/src/shared/plugins/plugin-manifest.ts), 예제 [hello-orca](https://github.com/stablyai/orca/tree/main/examples/plugins/hello-orca)뿐이고, 소스 주석이 `pluginApi` 1이 얼기 전까지 호환을 보장하지 않는다고 적어 뒀다. Orca를 올린 뒤 안 뜨면 매니페스트 스키마부터 본다.
 
 ## 배치

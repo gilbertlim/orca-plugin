@@ -1,10 +1,17 @@
 {
   "name": "orca",
   "description": "Orca 워크트리로 갈라 병렬로 돌리는 절차. 레포마다 워크트리를 따고 에이전트를 붙여 리뷰와 머지까지 그 안에서 끝낸다.",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "author": {
     "name": "gilbert lim"
   },
   "license": "MIT",
-  "keywords": ["orca", "worktree", "parallel", "review", "orchestration", "claude-code"]
+  "keywords": [
+    "orca",
+    "worktree",
+    "parallel",
+    "review",
+    "orchestration",
+    "claude-code"
+  ]
 }

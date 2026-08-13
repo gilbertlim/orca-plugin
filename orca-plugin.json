@@ -1,24 +1,49 @@
 {
   "manifestVersion": 1,
   "pluginApi": 1,
-  "id": "orca-flow",
+  "id": "worktree-flow",
   "publisher": "gilbertlim",
-  "name": "orca worktree",
-  "version": "0.1.0",
+  "name": "Worktree Flow",
+  "version": "1.0.0",
   "description": "워크트리가 생기면 셋업 스크립트를 돌리고, 에이전트가 멈추면 알림을 띄운다.",
-  "author": { "name": "gilbert lim" },
-  "engines": { "orca": ">=1.4.0" },
+  "author": {
+    "name": "gilbert lim"
+  },
+  "engines": {
+    "orca": ">=1.4.0"
+  },
   "main": "main.mjs",
   "contributes": {
     "commands": [
-      { "id": "setup", "title": "워크트리 셋업 다시 돌리기", "context": "worktree" },
-      { "id": "status", "title": "워크트리 현황 알림", "context": "global" }
+      {
+        "id": "setup",
+        "title": "워크트리 셋업 다시 돌리기",
+        "context": "worktree"
+      },
+      {
+        "id": "status",
+        "title": "워크트리 현황 알림",
+        "context": "global"
+      }
     ],
-    "events": [{ "on": "worktree.created" }, { "on": "agent.status.changed" }]
+    "events": [
+      {
+        "on": "worktree.created"
+      },
+      {
+        "on": "agent.status.changed"
+      }
+    ]
   },
   "capabilities": [
-    { "kind": "events:subscribe" },
-    { "kind": "notifications:show" },
-    { "kind": "storage" }
+    {
+      "kind": "events:subscribe"
+    },
+    {
+      "kind": "notifications:show"
+    },
+    {
+      "kind": "storage"
+    }
   ]
 }

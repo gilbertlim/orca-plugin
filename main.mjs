@@ -93,7 +93,7 @@ const expandHome = (value) =>
 const WORKSPACES = expandHome(hostData.workspaces) || join(HOME, 'orca', 'workspaces')
 const REVIEWS = expandHome(hostData.reviews) || join(HOME, 'orca', 'reviews')
 
-const ANSI_RE = /\[[0-9;?]*[a-zA-Z]/g
+const ANSI_RE = /\u001b\[[0-9;?]*[a-zA-Z]/g
 const stripAnsi = (text) => text.replace(ANSI_RE, '')
 
 /**

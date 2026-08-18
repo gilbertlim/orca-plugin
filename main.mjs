@@ -96,6 +96,29 @@ const REVIEWS = expandHome(hostData.reviews) || join(HOME, 'orca', 'reviews')
 const ANSI_RE = /\u001b\[[0-9;?]*[a-zA-Z]/g
 const stripAnsi = (text) => text.replace(ANSI_RE, '')
 
+/** 알림 본문에 남길 줄 수. 배너가 어차피 두어 줄에서 끊으므로 그 언저리로 둔다. */
+const BODY_LINES = 4
+
+/**
+ * 알림 본문을 평문으로 만든다. 마크다운 표시는 렌더되지 않고 글자 그대로 뜨며,
+ * `-----` 같은 구분선은 비례폭이라 길이가 제각각인 채 줄만 차지한다.
+ * 여러 줄에서 뒤쪽만 남기는 것은 빌드 로그 때문이다 -- 원인은 대개 끝에 있다.
+ */
+function plainBody(body) {
+  if (!body) {
+    return ''
+  }
+  return String(body)
+    .replace(/```+/g, ' ')
+    .replace(/[`*_#>]/g, '')
+    .replace(/[-=~─—]{3,}/g, ' ')
+    .split('\n')
+    .map((line) => line.replace(/[ \t]+/g, ' ').trim())
+    .filter(Boolean)
+    .slice(-BODY_LINES)
+    .join('\n')
+}
+
 /**
  * Finder나 Dock에서 뜬 앱의 PATH는 launchd 기본(`/usr/bin:/bin:/usr/sbin:/sbin`)
  * 이다. git과 bash는 거기 있지만 orca, pnpm, uv 는 대개 그 밖이다. 그대로 두면
@@ -189,11 +212,25 @@ function run(file, args, { cwd, env, timeoutMs, killOnTimeout = true, onLateExit
   })
 }
 
+/**
+ * 제목은 `<워크트리> — <사건>` 순으로 짓는다. 알림이 여러 개 쌓이면 왼쪽 끝만
+ * 훑어 어느 워크트리인지부터 갈라내고 사건은 그다음에 읽는 순서가 되기 때문이다.
+ * 워크트리를 겨누지 않는 것(status, 워크트리를 못 정한 setup)만 사건으로 시작한다.
+ *
+ * **본문은 평문이다.** 마크다운도 고정폭 정렬도 안 먹는다. 표나 코드펜스를 넣으면
+ * 글자가 그대로 뜨고, 비례폭이라 칸도 맞지 않는다. 그래서 status는 표가 아니라
+ * 세어 둔 수를 싣는다. 여러 줄은 되지만 배너가 두어 줄에서 끊으므로 짧게 든다.
+ *
+ * 본문은 plainBody 를 지나간다. 우리가 쓰는 문구만 있으면 필요 없겠지만, 카드
+ * 코멘트는 에이전트가 쓴 글이고 셋업 실패 본문은 빌드 로그라 마크다운과 구분선이
+ * 섞여 든다. 걷어내는 자리를 여기 하나로 둔다.
+ */
 async function notify(orca, title, body) {
+  const plain = plainBody(body)
   try {
     await orca.host.call('notifications.show', {
       title: String(title).slice(0, 120),
-      ...(body ? { body: String(body).slice(0, 1000) } : {})
+      ...(plain ? { body: plain.slice(0, 1000) } : {})
     })
   } catch (error) {
     orca.log(`알림 실패: ${error?.message ?? error}`)
@@ -244,8 +281,13 @@ async function projectConfigFor(path) {
 }
 
 /**
- * 리뷰 판정이 마지막 커밋보다 낡았으면 고친 뒤 재리뷰를 안 돌린 상태다.
- * status.sh가 표에 찍는 것과 같은 판정을 알림에 한 조각 얹는다.
+ * 리뷰가 돈 뒤로 새 커밋이 하나도 없는데 에이전트가 멈췄을 때만 한 줄 얹는다.
+ * 아무것도 안 했거나 커밋을 빠뜨린 상태라 사람이 볼 값이 있다.
+ *
+ * 나머지 둘은 안 싣는다. 첫 dispatch 뒤에는 리뷰 파일이 없어서 늘 "안 함"이고
+ * handback 뒤에는 고쳐서 커밋했으니 늘 "낡음"이다 -- 상황이 정해 놓은 값이라
+ * 읽히지 않고, 안 읽히는 줄이 매번 붙으면 그 위의 카드 줄까지 같이 묻힌다.
+ * 리뷰 상태를 훑는 자리는 status.sh 표의 리뷰 칸이다.
  */
 async function reviewNote(path) {
   const parts = worktreeLabel(path)
@@ -254,7 +296,7 @@ async function reviewNote(path) {
   }
   const file = join(REVIEWS, `${parts.repo}-${parts.name}.md`)
   if (!existsSync(file)) {
-    return '리뷰 안 함'
+    return ''
   }
   const [reviewedAt, commit] = await Promise.all([
     stat(file)
@@ -266,7 +308,7 @@ async function reviewNote(path) {
   if (!Number.isFinite(committedAt) || committedAt <= 0) {
     return ''
   }
-  return reviewedAt < committedAt ? '리뷰 낡음' : '리뷰 있음'
+  return reviewedAt < committedAt ? '' : '새 커밋 없음'
 }
 
 /**
@@ -384,10 +426,15 @@ async function runSetup(orca, path, { origin }) {
   // 사람이 누른 커맨드는 조용히 죽으면 안 된다. 눌렀는데 아무 일도 안 일어나면
   // 돌았는지 안 돌았는지 알 방법이 없다. 이벤트는 반대로 조용한 편이 낫다.
   const byHand = origin === 'command'
-  const standDown = async (reason, body) => {
+  /**
+   * 물러설 때 부른다. headline이 제목에 그대로 들어간다 -- 물러서는 이유가
+   * 기다리면 되는 것(남이 돌고 있다)과 고장난 것(워크트리가 없다)으로 갈리는데,
+   * 제목을 하나로 묶어 두면 그 둘이 알림 목록에서 구분되지 않는다.
+   */
+  const standDown = async (headline, reason, body) => {
     orca.log(`${reason}: ${path}`)
     if (byHand) {
-      await notify(orca, `셋업을 안 돌렸다 — ${shortName(path)}`, body ?? reason)
+      await notify(orca, `${shortName(path)} — ${headline}`, body ?? reason)
     }
   }
 
@@ -395,11 +442,11 @@ async function runSetup(orca, path, { origin }) {
     return { ok: false, reason: 'no-path' }
   }
   if (inflight.has(path)) {
-    await standDown('이미 돌고 있다')
+    await standDown('셋업이 이미 돌고 있다', '이미 돌고 있다', '끝나면 카드와 알림으로 온다.')
     return { ok: false, reason: 'inflight' }
   }
   if (!(await waitForDir(path, 15_000))) {
-    await standDown('워크트리 디렉터리가 안 생겼다')
+    await standDown('셋업할 워크트리가 없다', '워크트리 디렉터리가 안 생겼다', '15초를 기다려도 디렉터리가 안 생겼다.')
     return { ok: false, reason: 'missing' }
   }
 
@@ -408,7 +455,11 @@ async function runSetup(orca, path, { origin }) {
   const project = await projectConfigFor(path)
   const setup = project?.data?.setup ?? {}
   if (setup.enabled === false) {
-    await standDown('프로젝트가 셋업을 껐다 (setup.enabled=false)')
+    await standDown(
+      '셋업을 껐다',
+      '프로젝트가 셋업을 껐다 (setup.enabled=false)',
+      `${project.file} 의 setup.enabled 가 false 다.`
+    )
     return { ok: true, reason: 'disabled' }
   }
   const script =
@@ -418,7 +469,7 @@ async function runSetup(orca, path, { origin }) {
         : join(project.root, setup.script)
       : SETUP_SCRIPT
   if (!existsSync(script)) {
-    await standDown('셋업 스크립트를 못 찾았다', script)
+    await standDown('셋업 스크립트가 없다', '셋업 스크립트를 못 찾았다', script)
     return { ok: false, reason: 'no-script' }
   }
 
@@ -450,26 +501,35 @@ async function runSetup(orca, path, { origin }) {
       .catch(() => undefined)
 
     if (result.timedOut) {
-      await stampCard(orca, path, '셋업이 길어진다 -- 백그라운드로 계속 돈다')
-      await notify(orca, `셋업이 길어진다 — ${name}`, '백그라운드로 계속 돈다. 플러그인 로그를 본다.')
+      await stampCard(orca, path, '셋업이 길어진다 — 백그라운드로 계속 돈다')
+      await notify(orca, `${name} — 셋업이 길어진다`, '백그라운드로 계속 돈다. 끝날 때까지 빌드는 미룬다.')
     } else if (result.code === SETUP_LOCKED) {
       // 이벤트로 왔으면 조용히 빠진다. 잡고 있는 쪽 화면이 이미 진행을 찍고 있고,
       // dispatch 경로는 위의 claim에서 걸러진 뒤라 여기 오는 것은 사람이 부른 것뿐이다.
-      await standDown('다른 실행이 잡고 있다', '그 실행이 끝나면 다시 누른다.')
+      await standDown('셋업은 다른 실행이 돌고 있다', '다른 실행이 잡고 있다', '그 실행이 끝나면 다시 누른다.')
     } else if (result.code === 0) {
       // "not found, skipped"로 넘어간 의존성이 있으면 완료라고만 말하면 안 된다.
       // 그 워크트리는 node_modules 없이 서 있고, 빌드는 나중에 깨진다.
       const skipped = [...result.tail.matchAll(/(\w+) not found, skipped/g)].map((m) => m[1])
-      await notify(
-        orca,
-        `워크트리 셋업 완료 — ${name}`,
-        skipped.length
-          ? `${skipped.join(', ')}를 못 찾아 의존성은 건너뛰었다. 손으로 설치한다.`
-          : '이제 빌드와 기동이 된다.'
-      )
+      if (skipped.length) {
+        await notify(
+          orca,
+          `${name} — 셋업 완료`,
+          `${skipped.join(', ')}를 못 찾아 의존성은 건너뛰었다. 손으로 설치한다.`
+        )
+      } else if (byHand) {
+        // 사람이 누른 것에만 답한다. 워크트리를 만들면 셋업이 도는 것은 정해진
+        // 일이라, 될 때마다 우는 알림은 정작 봐야 할 실패까지 같이 흘려보낸다.
+        await notify(orca, `${name} — 셋업 완료`, '이제 빌드와 기동이 된다.')
+      } else {
+        orca.log(`setup 완료, 알림은 안 띄운다: ${path}`)
+      }
     } else {
-      await stampCard(orca, path, '셋업 실패 -- 빌드 전에 손으로 확인한다')
-      await notify(orca, `워크트리 셋업 실패 — ${name}`, result.tail.slice(-400) || `종료 코드 ${result.code}`)
+      await stampCard(orca, path, '셋업 실패 — 빌드 전에 손으로 확인한다')
+      // 꼬리 개행이 붙은 채로 실으면 본문 끝에 빈 줄이 남는다. 자른 뒤에도 한 번
+      // 더 다듬는 것은 400자 경계가 줄 가운데를 지날 수 있어서다.
+      const detail = result.tail.trim().slice(-400).trim()
+      await notify(orca, `${name} — 셋업 실패`, detail || `종료 코드 ${result.code}`)
     }
     return { ok: result.code === 0, code: result.code, timedOut: Boolean(result.timedOut) }
   } finally {
@@ -477,11 +537,48 @@ async function runSetup(orca, path, { origin }) {
   }
 }
 
+/**
+ * status.sh --summary 가 표 뒤에 붙여 준 블록을 읽는다. 표 자체는 안 판다 --
+ * 칸 너비가 바뀌면 그때마다 깨지는 파서가 되기 때문이다. 블록이 없으면 null이고,
+ * 부르는 쪽이 옛 스크립트로 보고 물러선다.
+ */
+function parseCounts(out) {
+  const index = out.lastIndexOf('--- counts')
+  if (index < 0) {
+    return null
+  }
+  const counts = {}
+  for (const line of out.slice(index).split('\n').slice(1)) {
+    const [key, value] = line.split('=')
+    if (key && value !== undefined && Number.isFinite(Number(value))) {
+      counts[key.trim()] = Number(value)
+    }
+  }
+  return Number.isFinite(counts.worktrees) ? counts : null
+}
+
+/**
+ * 손이 가야 하는 것만 센다. 멀쩡한 워크트리는 안 적는다 -- 전부 적으면 그중
+ * 무엇이 문제인지 다시 골라 읽어야 하고, 그럴 거면 표를 보는 것과 같다.
+ */
+function summaryBody(counts) {
+  const review = [
+    counts.review_stale ? `리뷰 낡음 ${counts.review_stale}` : '',
+    counts.review_none ? `리뷰 안 함 ${counts.review_none}` : ''
+  ].filter(Boolean)
+  const work = [
+    counts.dirty ? `미커밋 ${counts.dirty}` : '',
+    counts.no_terminal ? `터미널 없음 ${counts.no_terminal}` : ''
+  ].filter(Boolean)
+  const lines = [review.join(', '), work.join(', ')].filter(Boolean)
+  return lines.length ? lines.join('\n') : '전부 리뷰까지 닫혔다.'
+}
+
 /** 사람이 볼 이유가 있는 상태만 띄운다. working은 조용히 지나간다. */
 const NOTIFY_STATES = {
-  done: '에이전트가 끝났다',
-  waiting: '에이전트가 입력을 기다린다',
-  blocked: '에이전트가 막혔다'
+  done: '끝났다',
+  waiting: '답을 기다린다',
+  blocked: '막혔다'
 }
 
 export default function activate(orca) {
@@ -501,7 +598,7 @@ export default function activate(orca) {
     }
     const path = pathFromWorktreeId(payload?.worktreeId)
     if (!path) {
-      await notify(orca, `${NOTIFY_STATES[state]} — 워크트리 밖`)
+      await notify(orca, `워크트리 밖 — ${NOTIFY_STATES[state]}`)
       return
     }
     // 카드 줄이 본문의 첫 줄이다. 왜 멈췄는지는 에이전트가 거기 써 뒀고,
@@ -511,7 +608,7 @@ export default function activate(orca) {
       state === 'done' ? reviewNote(path) : Promise.resolve('')
     ])
     const body = [comment, note].filter(Boolean).join('\n')
-    await notify(orca, `${NOTIFY_STATES[state]} — ${shortName(path)}`, body)
+    await notify(orca, `${shortName(path)} — ${NOTIFY_STATES[state]}`, body)
   })
 
   /**
@@ -538,18 +635,26 @@ export default function activate(orca) {
     return { started: true, path }
   })
 
-  /** status 표를 알림 하나로 띄우고 전체는 플러그인 로그에 남긴다. */
+  /** status 표는 로그로 보내고 알림에는 세어 둔 수만 싣는다. */
   orca.commands.register('status', async () => {
     // 워크트리를 안 겨눈 전역 조회라 프로젝트 설정을 고를 근거가 없다.
     // 호스트 설정이 있으면 그것을 읽게 하고(baseBranch 같은 것), 없으면 기본값이다.
     const env = hostConfig ? { ...childEnv(), ORCA_FLOW_ROOT: hostConfig.root } : childEnv()
-    const result = await run('bash', [STATUS_SCRIPT], { env, timeoutMs: COMMAND_WAIT_MS })
+    const result = await run('bash', [STATUS_SCRIPT, '--summary'], { env, timeoutMs: COMMAND_WAIT_MS })
     orca.log(`status\n${result.tail}`.slice(0, 8_000))
-    // 표는 첫 덩어리다. 그 아래는 워크트리별 커밋 목록이라 알림에 안 싣는다.
-    // tail이 아니라 out을 보는 것은 경고 한 줄이 표 앞에 끼면 정렬이 무너져서다.
-    const table = result.out.split('\n\n')[0].trim()
     const missing = existsSync(WORKSPACES) ? '' : ' (워크스페이스 없음)'
-    await notify(orca, `워크트리 현황${missing}`, table || '떠 있는 워크트리가 없다.')
+    const counts = parseCounts(result.out)
+    if (!counts) {
+      // status.sh 는 이 플러그인에 같이 실리므로 블록이 없을 이유가 없다.
+      // 없으면 스크립트가 중간에 죽은 것이니 표를 싣지 말고 그렇다고 말한다.
+      await notify(orca, '워크트리 현황을 못 읽었다', 'status.sh 출력이 예상과 다르다. 플러그인 로그를 본다.')
+      return { ok: false }
+    }
+    if (!counts.worktrees) {
+      await notify(orca, `워크트리 현황${missing}`, '떠 있는 워크트리가 없다.')
+      return { ok: result.code === 0 }
+    }
+    await notify(orca, `워크트리 ${counts.worktrees}개${missing}`, summaryBody(counts))
     return { ok: result.code === 0 }
   })
 

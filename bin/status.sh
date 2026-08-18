@@ -1,12 +1,39 @@
 #!/usr/bin/env bash
 # 지금 떠 있는 워크트리 전부를 한 자리에 찍는다.
 #
-#   status.sh            전부
-#   status.sh shared     한 레포만
+#   status.sh              전부
+#   status.sh shared       한 레포만
+#   status.sh --summary    표 끝에 세어 둔 값을 기계가 읽을 꼴로 덧붙인다
+#
+# --summary 는 앱 플러그인이 쓴다. 알림 본문은 비례폭이라 이 표의 칸 정렬이
+# 통째로 무너지고 배너는 두어 줄에서 잘리므로, 거기엔 표가 아니라 수를 싣는다.
 
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
+SUMMARY=0
+if [ "${1:-}" = "--summary" ]; then
+  SUMMARY=1
+  shift
+fi
+
 FILTER="${1:-}"
+
+# --summary 일 때만 찍는다. 표 뒤에 붙으므로 사람이 그냥 부르면 안 보인다.
+emit_counts() {
+  [ "$SUMMARY" = 1 ] || return 0
+  printf -- '--- counts\n'
+  printf 'worktrees=%s\n' "${n_total:-0}"
+  printf 'review_stale=%s\n' "${n_stale:-0}"
+  printf 'review_none=%s\n' "${n_unreviewed:-0}"
+  printf 'dirty=%s\n' "${n_dirty:-0}"
+  printf 'no_terminal=%s\n' "${n_idle:-0}"
+}
+
+n_total=0
+n_stale=0
+n_unreviewed=0
+n_dirty=0
+n_idle=0
 
 TERMS="$(orca terminal list --json 2>/dev/null | python3 -c '
 import sys, json
@@ -70,6 +97,12 @@ for dir in "$ORCA_WORKSPACES"/*/*; do
     if [ "$rt" -lt "$ct" ]; then review="낡음"; else review="있음"; fi
   fi
 
+  n_total=$((n_total + 1))
+  [ "$review" = "낡음" ] && n_stale=$((n_stale + 1))
+  [ "$review" = "안 함" ] && n_unreviewed=$((n_unreviewed + 1))
+  [ "${dirty:-0}" != 0 ] && n_dirty=$((n_dirty + 1))
+  [ "${tcount:-0}" = 0 ] && n_idle=$((n_idle + 1))
+
   printf '%-34s %-6s %-7s %-10s %s\n' "$repo/$name" "$ahead" "$dirty" "$review" "${titles:-없음}"
 
   # 카드 줄은 표에 넣지 않고 아래에 붙인다. 길이가 제각각이라 칸에 넣으면 정렬이 무너진다.
@@ -79,7 +112,7 @@ for dir in "$ORCA_WORKSPACES"/*/*; do
   fi
 done
 
-[ "$found" = 1 ] || { printf '떠 있는 워크트리가 없다.\n'; exit 0; }
+[ "$found" = 1 ] || { printf '떠 있는 워크트리가 없다.\n'; emit_counts; exit 0; }
 
 printf '\n'
 for dir in "$ORCA_WORKSPACES"/*/*; do
@@ -90,3 +123,5 @@ for dir in "$ORCA_WORKSPACES"/*/*; do
   [ -n "$log" ] || continue
   printf '=== %s/%s\n%s\n\n' "$repo" "$(basename "$dir")" "$log"
 done
+
+emit_counts
